@@ -8,6 +8,7 @@
 .vscode/ipch
 
 .venv/
+.python-version
 
 .zencoder
 
