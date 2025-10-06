@@ -16,7 +16,7 @@ This project provides firmware and a Python API for an ESP32-based spirometer de
 - `SpirometerAPI.py` — Python BLE client API for the spirometer
 - `Example Game.py` — Flappy Bird-style game using the spirometer as input
 - `requirements.txt` — Python dependencies
-- `.vscode/`, `.pio/`, `venv/` — Development and build environment files
+- `README.md` — Project documentation
 
 ---
 

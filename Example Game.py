@@ -30,9 +30,9 @@ Requirements
 api = Spirometer(
     device_id="9C:13:9E:9D:20:C1",
     auto_calibrate_on_connect=True,
-    calibration_samples=100,
+    calibration_samples=200,
     stability_std_threshold=30.0,      # <-- Increased threshold
-    stability_min_samples=10,          # <-- Fewer samples required
+    stability_min_samples=15,          # <-- Fewer samples required
 )
 
 connect_state = {"state": "connecting", "error": None}
@@ -62,9 +62,9 @@ FONT = pygame.font.SysFont("Arial", 24)
 # Game world params
 GRAVITY = 0.7
 FLAP_VELOCITY = -12
-PIPE_GAP = 160
+PIPE_GAP = 320
 PIPE_WIDTH = 70
-PIPE_SPEED = 4
+PIPE_SPEED = 2
 SPAWN_TIME = 1400  # ms
 
 # Input mapping params
@@ -181,18 +181,21 @@ while running:
                 score += 1
 
     # Collision & bounds
-    if bird.y - bird.r < 0 or bird.y + bird.r > HEIGHT:
-        bird.reset()
-        pipes.clear()
-        score = 0
+    # Keep bird in bounds instead of resetting for ceiling/floor
+    if bird.y - bird.r < 0:
+        bird.y = bird.r
+        bird.vy = 0.0
+    if bird.y + bird.r > HEIGHT - 60:
+        bird.y = HEIGHT - 60 - bird.r
+        bird.vy = 0.0
 
-    else:
-        for p in pipes:
-            if p.collides(int(bird.x), int(bird.y), bird.r):
-                bird.reset()
-                pipes.clear()
-                score = 0
-                break
+    # Reset game on pipe collision
+    for p in pipes:
+        if p.collides(int(bird.x), int(bird.y), bird.r):
+            bird.reset()
+            pipes.clear()
+            score = 0
+            break
 
     # Battery polling (non-blocking feel; API handles async)
     now = time.time()
@@ -236,6 +239,14 @@ try:
     api.disconnect()
 except Exception:
     pass
+
+# Export recorded values to CSV when game is closed
+try:
+    csv_path = "spirometer_recorded.csv"
+    api.export_calibrated_csv(csv_path)
+    print(f"Recorded spirometer values exported to {csv_path}")
+except Exception as e:
+    print(f"Failed to export CSV: {e}")
 
 pygame.quit()
 sys.exit()

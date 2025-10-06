@@ -64,7 +64,7 @@ class Spirometer:
         auto_calibrate_on_connect: bool = True,
         calibration_samples: int = 200,
         # Stability and drift settings
-        stability_window_seconds: float = 1.0,
+        stability_window_seconds: float = 10.0,
         stability_min_samples: int = 30,
         stability_std_threshold: float = 10.0,
         idle_mag_threshold: float = 20.0,
@@ -136,6 +136,7 @@ class Spirometer:
         Stable = low stddev in dx, dy, dz over recent window.
         """
         self._stability_buf.append((t, dx, dy, dz))
+        # print(dx)
         # Drop old samples outside time window
         while self._stability_buf and (t - self._stability_buf[0][0]) > self.stability_window_seconds:
             self._stability_buf.popleft()
@@ -148,6 +149,7 @@ class Spirometer:
             stdx = pstdev(xs)
             stdy = pstdev(ys)
             stdz = pstdev(zs)
+            #print(stdx)
             self._stability_stats.update({"stdx": stdx, "stdy": stdy, "stdz": stdz})
             self._stable = (stdx < self.stability_std_threshold and
                             stdy < self.stability_std_threshold and
@@ -330,6 +332,7 @@ class Spirometer:
             self._calibrating = False
             raise RuntimeError("Calibration failed: device not stable long enough.")
         self._offset = [s / self._calib_count for s in self._calib_sum]
+        # print(f"Calibration offset: {self._offset}")
         self._calibrating = False
 
     # ------------------------ Notification parsers for each characteristic ------------------------
