@@ -23,6 +23,7 @@ Controls
 Requirements
 - pip install pygame bleak pandas
 - Ensure your device is advertising with the configured UUIDs in SpirometerAPI.py
+- Check device ID using e.g. nRF Connect app and change if necessary
 """
 
 # ------------------------ BLE Client Setup ------------------------
