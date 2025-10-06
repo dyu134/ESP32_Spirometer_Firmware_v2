@@ -64,7 +64,7 @@ GRAVITY = 0.7
 FLAP_VELOCITY = -12
 PIPE_GAP = 160
 PIPE_WIDTH = 70
-PIPE_SPEED = 4
+PIPE_SPEED = 2
 SPAWN_TIME = 1400  # ms
 
 # Input mapping params
