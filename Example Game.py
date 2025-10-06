@@ -28,7 +28,7 @@ Requirements
 
 # ------------------------ BLE Client Setup ------------------------
 api = Spirometer(
-    device_id="9C:13:9E:9D:20:C1",
+    device_id="B4:3A:45:34:A2:95",
     auto_calibrate_on_connect=True,
     calibration_samples=100,
     stability_std_threshold=30.0,      # <-- Increased threshold
@@ -181,18 +181,21 @@ while running:
                 score += 1
 
     # Collision & bounds
-    if bird.y - bird.r < 0 or bird.y + bird.r > HEIGHT:
-        bird.reset()
-        pipes.clear()
-        score = 0
+    # Keep bird in bounds instead of resetting for ceiling/floor
+    if bird.y - bird.r < 0:
+        bird.y = bird.r
+        bird.vy = 0.0
+    if bird.y + bird.r > HEIGHT - 60:
+        bird.y = HEIGHT - 60 - bird.r
+        bird.vy = 0.0
 
-    else:
-        for p in pipes:
-            if p.collides(int(bird.x), int(bird.y), bird.r):
-                bird.reset()
-                pipes.clear()
-                score = 0
-                break
+    # Reset game on pipe collision
+    for p in pipes:
+        if p.collides(int(bird.x), int(bird.y), bird.r):
+            bird.reset()
+            pipes.clear()
+            score = 0
+            break
 
     # Battery polling (non-blocking feel; API handles async)
     now = time.time()
