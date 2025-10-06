@@ -318,7 +318,7 @@ void setup() {
 
 void loop() {
   float x1, y1, z1, x2, y2, z2;
-  
+  // 
   if (sensor1.readData(&x1, &y1, &z1) && sensor2.readData(&x2, &y2, &z2)) {
     // transformSensor2Readings(&x2, &y2, &z2);
     
@@ -337,6 +337,9 @@ void loop() {
     // float filteredLocalX = hpf_x.update(localX);
     
     // Update LED
+    // x1 = 0.0;
+    // z1 = 0.0;
+    // y1 = 0.0;
     updateNeopixel(x1);
 
     // Print results
