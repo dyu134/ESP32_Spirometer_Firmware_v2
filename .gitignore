@@ -4,9 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 venv/
-<<<<<<< HEAD
 __pycache__/
 .vscode/
 .zencoder/
-=======
->>>>>>> parent of 2e1fa67 (fix gitignore)
