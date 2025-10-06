@@ -27,8 +27,11 @@ Requirements
 
 # ------------------------ BLE Client Setup ------------------------
 api = Spirometer(
-    auto_calibrate_on_connect=True,   # auto-calibrates on connect using calibration_samples
-    calibration_samples=200,
+    device_id="9C:13:9E:9D:20:C1",
+    auto_calibrate_on_connect=True,
+    calibration_samples=100,
+    stability_std_threshold=30.0,      # <-- Increased threshold
+    stability_min_samples=10,          # <-- Fewer samples required
 )
 
 connect_state = {"state": "connecting", "error": None}

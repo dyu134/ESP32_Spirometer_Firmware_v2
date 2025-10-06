@@ -18,8 +18,12 @@ Adafruit_NeoPixel pixels(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 //BLE Server name (the other ESP32 name running the server sketch)
 #define bleServerName       "sensor_MIRS"
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-BLECharacteristic *pCharacteristic;
+#define CHARACTERISTIC_C1_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define CHARACTERISTIC_C2_UUID "1f9803c5-26c3-41c4-93a9-7358baa3f1c2"
+#define CHARACTERISTIC_Y_UUID "55a61982-180d-40c4-9c7c-437514c66290"
+BLECharacteristic *pCharacteristic1;
+BLECharacteristic *pCharacteristic2;
+BLECharacteristic *pCharacteristicY;
 
 #define BATTERY_SERVICE_UUID "0000180F-0000-1000-8000-00805F9B34FB"
 #define BATTERY_LEVEL_CHAR_UUID "00002A19-0000-1000-8000-00805F9B34FB"
@@ -89,7 +93,9 @@ class MyServerCallbacks: public BLEServerCallbacks {
   
   void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
-    pCharacteristic->notify();
+    pCharacteristic1->notify();
+    pCharacteristic2->notify();
+    pCharacteristicY->notify();
 
   }
 };
@@ -289,11 +295,21 @@ void setup() {
   pServer->setCallbacks(new MyServerCallbacks());
   
   BLEService *pService = pServer->createService(SERVICE_UUID); // Environmental Sensing
-  pCharacteristic = pService->createCharacteristic(
-    CHARACTERISTIC_UUID, // Analog Output
+  pCharacteristic1 = pService->createCharacteristic(
+    CHARACTERISTIC_C1_UUID, // Analog Output
     BLECharacteristic::PROPERTY_NOTIFY
   );
-  pCharacteristic->addDescriptor(new BLE2902());
+  pCharacteristic1->addDescriptor(new BLE2902());
+  pCharacteristic2 = pService->createCharacteristic(
+    CHARACTERISTIC_C2_UUID,
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pCharacteristic2->addDescriptor(new BLE2902());
+  pCharacteristicY = pService->createCharacteristic(
+    CHARACTERISTIC_Y_UUID,
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pCharacteristicY->addDescriptor(new BLE2902());
   pService->start();
 
   BLEService *pBatteryService = pServer->createService(BATTERY_SERVICE_UUID);
@@ -356,10 +372,16 @@ void loop() {
       //Serial.print(sampleCount);
       Serial.println();
 
-      String data = "s " + String(x1, 2) + " x1" + " " + String(z1, 2) + " z1" + " " + String(x2, 2) + " x2" + " " + String(z2, 2) + " z2" + " " + String(y1, 2) + " y1" + " " + String(y2, 2) + " y2";
+      String data1 = "s " + String(x1, 2) + " x1 " + String(z1, 2) + " z1";
+      String data2 = "s " + String(x2, 2) + " x2 " + String(z2, 2) + " z2";
+      String dataY = "s " + String(y1, 2) + " y1 " + String(y2, 2) + " y2";
       // Send the data over BLE
-      pCharacteristic->setValue(data.c_str());
-      pCharacteristic->notify();
+      pCharacteristic1->setValue(data1.c_str());
+      pCharacteristic1->notify();
+      pCharacteristic2->setValue(data2.c_str());
+      pCharacteristic2->notify();
+      pCharacteristicY->setValue(dataY.c_str());
+      pCharacteristicY->notify();
     }
 
     // Check for recalibration

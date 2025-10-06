@@ -12,17 +12,50 @@ from collections import deque
 class Spirometer:
     """
     Python BLE client for ESP32 Spirometer.
-    - Streams raw values: (x1, y1, z1) cilia field with offset; (x2, y2, z2) earth field
-    - Calibrates cilia field using earth field: cal = (x1 - x2, y1 - y2, z1 - z2) - offset
-    - Exports calibrated data (CSV)
-    - Reads current battery level (%)
+
+    Streams raw hall sensor values from three BLE characteristics:
+      - c1_char: x1, z1
+      - c2_char: x2, z2
+      - y_char:  y1, y2
+
+    Combines these into a single sample:
+      - dx = x1 - x2
+      - dy = y1 + y2
+      - dz = z1 + z2
+
+    Calibrates cilia field using earth field:
+      - cal_x = dx - offset_x
+      - cal_y = dy - offset_y
+      - cal_z = dz - offset_z
+
+    Stability detection:
+      - Maintains a time window of samples
+      - Device is considered stable if stddev of dx, dy, dz is below threshold
+
+    Drift compensation:
+      - If device is idle and stable for a period, offsets are slowly updated
+
+    Features:
+      - Exports calibrated data (CSV or pandas DataFrame)
+      - Reads current battery level (%)
+      - Thread-safe sample storage
+      - Auto-calibration on connect (optional)
+      - Real-time access to latest calibrated sample
+
+    Usage:
+      - Connect to BLE device and start notifications for all three characteristics
+      - Use get_latest_calibrated_x() for real-time X value
+      - Use calibrate() to manually recalibrate offsets
+      - Use export_calibrated_csv() to save data
     """
 
     def __init__(
         self,
         device_id: Optional[str] = "B4:3A:45:34:A2:95",
         data_service_uuid: str = "4fafc201-1fb5-459e-8fcc-c5c9c331914b",
-        data_char_uuid: str = "beb5483e-36e1-4688-b7f5-ea07361b26a8",
+        c1_char_uuid: str = "beb5483e-36e1-4688-b7f5-ea07361b26a8",
+        c2_char_uuid: str = "1f9803c5-26c3-41c4-93a9-7358baa3f1c2",
+        y_char_uuid: str = "55a61982-180d-40c4-9c7c-437514c66290",
         battery_service_uuid: str = "0000180F-0000-1000-8000-00805F9B34FB",
         battery_char_uuid: str = "00002A19-0000-1000-8000-00805F9B34FB",
         auto_calibrate_on_connect: bool = True,
@@ -30,7 +63,7 @@ class Spirometer:
         # Stability and drift settings
         stability_window_seconds: float = 1.0,
         stability_min_samples: int = 30,
-        stability_std_threshold: float = 5.0,
+        stability_std_threshold: float = 10.0,
         idle_mag_threshold: float = 20.0,
         idle_required_seconds: float = 2.0,
         drift_alpha: float = 0.002,
@@ -38,7 +71,9 @@ class Spirometer:
     ) -> None:
         self.device_id = device_id
         self.data_service_uuid = data_service_uuid
-        self.data_char_uuid = data_char_uuid
+        self.c1_char_uuid = c1_char_uuid
+        self.c2_char_uuid = c2_char_uuid
+        self.y_char_uuid = y_char_uuid
         self.battery_service_uuid = battery_service_uuid
         self.battery_char_uuid = battery_char_uuid
         self.auto_calibrate_on_connect = auto_calibrate_on_connect
@@ -77,6 +112,12 @@ class Spirometer:
         self._stable: bool = False
         self._stability_stats: Dict[str, Any] = {"stdx": None, "stdy": None, "stdz": None, "count": 0}
         self._last_idle_start: Optional[float] = None
+
+        # Buffers for characteristic data
+        self._c1_data = None  # (x1, z1)
+        self._c2_data = None  # (x2, z2)
+        self._y_data = None   # (y1, y2)
+        self._last_sample_time = 0.0
 
     # ------------------------ Async loop plumbing ------------------------
     def _run_loop(self) -> None:
@@ -224,14 +265,15 @@ class Spirometer:
     async def _async_connect(self) -> None:
         if self._client and self._client.is_connected:
             return
-        # Ensure device_id is set and typed as str for the BLE client
         dev_id = self.device_id
         if dev_id is None:
             raise RuntimeError("device_id not set. Call discover_and_set_device() or provide device_id.")
         self._client = BleakClient(dev_id)
         await self._client.connect()
-        # Start streaming notifications
-        await self._client.start_notify(self.data_char_uuid, self._on_data)
+        # Start streaming notifications for all three characteristics
+        await self._client.start_notify(self.c1_char_uuid, self._on_c1_data)
+        await self._client.start_notify(self.c2_char_uuid, self._on_c2_data)
+        await self._client.start_notify(self.y_char_uuid, self._on_y_data)
         # Optionally auto-calibrate
         if self.auto_calibrate_on_connect:
             await self._async_calibrate(samples=self.calibration_samples)
@@ -239,7 +281,15 @@ class Spirometer:
     async def _async_disconnect(self) -> None:
         if self._client:
             try:
-                await self._client.stop_notify(self.data_char_uuid)
+                await self._client.stop_notify(self.c1_char_uuid)
+            except Exception:
+                pass
+            try:
+                await self._client.stop_notify(self.c2_char_uuid)
+            except Exception:
+                pass
+            try:
+                await self._client.stop_notify(self.y_char_uuid)
             except Exception:
                 pass
             if self._client.is_connected:
@@ -279,15 +329,14 @@ class Spirometer:
         self._offset = [s / self._calib_count for s in self._calib_sum]
         self._calibrating = False
 
-    # ------------------------ Notification parser ------------------------
-    def _on_data(self, _char: Any, data: bytearray) -> None:
+    # ------------------------ Notification parsers for each characteristic ------------------------
+    def _on_c1_data(self, _char: Any, data: bytearray) -> None:
         try:
             txt = data.decode(errors="ignore").strip()
             parts = txt.split()
-            # Expected: s <x1> x1 <z1> z1 <x2> x2 <z2> z2 <y1> y1 <y2> y2
-            # Extract floats at indices 1,3,5,7,9,11 if present
-            vals: List[float] = []
-            for i in (1, 3, 5, 7, 9, 11):
+            # Expect: s <x1> x1 <z1> z1
+            vals = []
+            for i in (1, 3):
                 if i < len(parts):
                     try:
                         vals.append(float(parts[i]))
@@ -295,56 +344,104 @@ class Spirometer:
                         vals.append(float('nan'))
                 else:
                     vals.append(float('nan'))
-            x1, z1, x2, z2, y1, y2 = vals
-            # Compose difference (cilia - earth) (sensor 2 is placed upside-down with x axis aligned with sensor 1)
-            dx = x1 - x2
-            dy = y1 + y2
-            dz = z1 + z2
-
-            now_t = time.time()
-            # Update stability with raw diffs
-            self._update_stability(dx, dy, dz, now_t)
-
-            # If calibrating, only accept stable samples
-            if self._calibrating and self._stable:
-                self._calib_sum[0] += dx
-                self._calib_sum[1] += dy
-                self._calib_sum[2] += dz
-                self._calib_count += 1
-
-            # Apply offset
-            cal_x = dx - self._offset[0]
-            cal_y = dy - self._offset[1]
-            cal_z = dz - self._offset[2]
-
-            # Idle detection based on magnitude of calibrated vector
-            mag = math.sqrt(cal_x * cal_x + cal_y * cal_y + cal_z * cal_z)
-            if mag < self.idle_mag_threshold and self._stable:
-                # Start or continue idle window
-                if self._last_idle_start is None:
-                    self._last_idle_start = now_t
-                # Apply slow drift correction if idle long enough
-                elif self.drift_enabled and (now_t - self._last_idle_start) >= self.idle_required_seconds:
-                    # Exponential moving average towards current raw diffs
-                    self._offset[0] = (1.0 - self.drift_alpha) * self._offset[0] + self.drift_alpha * dx
-                    self._offset[1] = (1.0 - self.drift_alpha) * self._offset[1] + self.drift_alpha * dy
-                    self._offset[2] = (1.0 - self.drift_alpha) * self._offset[2] + self.drift_alpha * dz
-            else:
-                # Reset idle timer on activity or instability
-                self._last_idle_start = None
-
-            row = {
-                "t": now_t,
-                "x1": x1, "y1": y1, "z1": z1,
-                "x2": x2, "y2": y2, "z2": z2,
-                "dx": dx, "dy": dy, "dz": dz,
-                "cal_x": cal_x, "cal_y": cal_y, "cal_z": cal_z,
-            }
-            with self._lock:
-                self._samples.append(row)
+            self._c1_data = tuple(vals)  # (x1, z1)
+            self._try_process_sample()
         except Exception:
-            # Ignore malformed packets
             return
+
+    def _on_c2_data(self, _char: Any, data: bytearray) -> None:
+        try:
+            txt = data.decode(errors="ignore").strip()
+            parts = txt.split()
+            # Expect: s <x2> x2 <z2> z2
+            vals = []
+            for i in (1, 3):
+                if i < len(parts):
+                    try:
+                        vals.append(float(parts[i]))
+                    except ValueError:
+                        vals.append(float('nan'))
+                else:
+                    vals.append(float('nan'))
+            self._c2_data = tuple(vals)  # (x2, z2)
+            self._try_process_sample()
+        except Exception:
+            return
+
+    def _on_y_data(self, _char: Any, data: bytearray) -> None:
+        try:
+            txt = data.decode(errors="ignore").strip()
+            parts = txt.split()
+            # Expect: s <y1> y1 <y2> y2
+            vals = []
+            for i in (1, 3):
+                if i < len(parts):
+                    try:
+                        vals.append(float(parts[i]))
+                    except ValueError:
+                        vals.append(float('nan'))
+                else:
+                    vals.append(float('nan'))
+            self._y_data = tuple(vals)  # (y1, y2)
+            self._try_process_sample()
+        except Exception:
+            return
+
+    def _try_process_sample(self) -> None:
+        # Only process when all three have new data
+        if self._c1_data is None or self._c2_data is None or self._y_data is None:
+            return
+        x1, z1 = self._c1_data
+        x2, z2 = self._c2_data
+        y1, y2 = self._y_data
+        now_t = time.time()
+        # Compose difference (cilia - earth)
+        dx = x1 - x2
+        dy = y1 + y2
+        dz = z1 + z2
+
+        self._update_stability(dx, dy, dz, now_t)
+
+        # If calibrating, only accept stable samples
+        if self._calibrating and self._stable:
+            self._calib_sum[0] += dx
+            self._calib_sum[1] += dy
+            self._calib_sum[2] += dz
+            self._calib_count += 1
+
+        # Apply offset
+        cal_x = dx - self._offset[0]
+        cal_y = dy - self._offset[1]
+        cal_z = dz - self._offset[2]
+
+        # Idle detection based on magnitude of calibrated vector
+        mag = math.sqrt(cal_x * cal_x + cal_y * cal_y + cal_z * cal_z)
+        if mag < self.idle_mag_threshold and self._stable:
+            if self._last_idle_start is None:
+                self._last_idle_start = now_t
+            elif self.drift_enabled and (now_t - self._last_idle_start) >= self.idle_required_seconds:
+                self._offset[0] = (1.0 - self.drift_alpha) * self._offset[0] + self.drift_alpha * dx
+                self._offset[1] = (1.0 - self.drift_alpha) * self._offset[1] + self.drift_alpha * dy
+                self._offset[2] = (1.0 - self.drift_alpha) * self._offset[2] + self.drift_alpha * dz
+        else:
+            self._last_idle_start = None
+
+        row = {
+            "t": now_t,
+            "x1": x1, "y1": y1, "z1": z1,
+            "x2": x2, "y2": y2, "z2": z2,
+            "dx": dx, "dy": dy, "dz": dz,
+            "cal_x": cal_x, "cal_y": cal_y, "cal_z": cal_z,
+        }
+        with self._lock:
+            self._samples.append(row)
+        # Reset buffers so next sample requires new data from all three
+        self._c1_data = None
+        self._c2_data = None
+        self._y_data = None
+
+    # Remove the old _on_data method (now replaced by the three above)
+    # ...existing code...
 
 
 # ------------------------ Simple usage example (commented) ------------------------
