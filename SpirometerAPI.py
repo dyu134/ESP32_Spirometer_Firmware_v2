@@ -43,10 +43,13 @@ class Spirometer:
       - Real-time access to latest calibrated sample
 
     Usage:
+      - Import using `from SpirometerAPI import Spirometer`
       - Connect to BLE device and start notifications for all three characteristics
       - Use get_latest_calibrated_x() for real-time X value
       - Use calibrate() to manually recalibrate offsets
-      - Use export_calibrated_csv() to save data
+      - Use export_calibrated_csv() or export_calibrated_df() to save data
+      - Use get_battery_level() to read battery level
+      - Read "Example Game" for a simple Flappy-Bird-like demo
     """
 
     def __init__(
