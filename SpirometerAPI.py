@@ -348,10 +348,10 @@ class Spirometer:
 
 
 # ------------------------ Simple usage example (commented) ------------------------
-# if __name__ == "__main__":
-#     api = Spirometer(auto_calibrate_on_connect=True, calibration_samples=300)
-#     api.connect()
-#     time.sleep(5)  # collect some data
-#     print("Battery:", api.get_battery_level(), "%")
-#     api.export_calibrated_csv("spirometer_data.csv")
-#     api.disconnect()
+if __name__ == "__main__":
+    api = Spirometer(device_id="9C:13:9E:9D:20:C1", auto_calibrate_on_connect=True, calibration_samples=300)
+    api.connect()
+    time.sleep(5)  # collect some data
+    print("Battery:", api.get_battery_level(), "%")
+    api.export_calibrated_csv("spirometer_data.csv")
+    api.disconnect()
