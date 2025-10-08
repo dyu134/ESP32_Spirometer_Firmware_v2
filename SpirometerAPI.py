@@ -266,6 +266,46 @@ class Spirometer:
         """Read current battery level (%) once from the Battery Level characteristic."""
         return self._run_coro(self._async_read_battery())
 
+    def is_idle(
+        self,
+        idle_x_threshold: float = 12.0,
+        idle_ratio_required: float = 0.85,
+        window_seconds: float = 20.0
+    ) -> bool:
+        """
+        Return True if the device has been idle:
+        - For at least idle_ratio_required of the last window_seconds,
+        - |cal_x - avg_x| < idle_x_threshold
+        """
+        with self._lock:
+            samples = [s for s in self._samples if "cal_x" in s]
+        if not samples:
+            return False
+        now = time.time()
+        # Only consider samples within the window
+        window_samples = [s for s in samples if now - s["t"] <= window_seconds]
+        if len(window_samples) < 5:
+            return False
+        avg_x = sum(s["cal_x"] for s in window_samples) / len(window_samples)
+        idle_samples = [abs(s["cal_x"] - avg_x) < idle_x_threshold for s in window_samples]
+        idle_ratio = sum(idle_samples) / len(idle_samples)
+        return idle_ratio > idle_ratio_required
+
+    def get_idle_avg_x(self, window_seconds: float = 20.0) -> Optional[float]:
+        """
+        Return the average cal_x over the last window_seconds, or None if not enough samples.
+        """
+        with self._lock:
+            samples = [s for s in self._samples if "cal_x" in s]
+        if not samples:
+            return None
+        now = time.time()
+        window_samples = [s for s in samples if now - s["t"] <= window_seconds]
+        if len(window_samples) < 5:
+            return None
+        avg_val = sum(s["cal_x"] for s in window_samples) / len(window_samples)
+        return avg_val
+
     # ------------------------ BLE internals (async) ------------------------
     async def _async_connect(self) -> None:
         if self._client and self._client.is_connected:
@@ -451,10 +491,10 @@ class Spirometer:
 
 
 # ------------------------ Simple usage example (commented) ------------------------
-if __name__ == "__main__":
-    api = Spirometer(device_id="9C:13:9E:9D:20:C1", auto_calibrate_on_connect=True, calibration_samples=300)
-    api.connect()
-    time.sleep(5)  # collect some data
-    print("Battery:", api.get_battery_level(), "%")
-    api.export_calibrated_csv("spirometer_data.csv")
-    api.disconnect()
+#if __name__ == "__main__":
+#    api = Spirometer(device_id="9C:13:9E:9D:20:C1", auto_calibrate_on_connect=True, calibration_samples=300)
+#    api.connect()
+#    time.sleep(5)  # collect some data
+#    print("Battery:", api.get_battery_level(), "%")
+#    api.export_calibrated_csv("spirometer_data.csv")
+#    api.disconnect()

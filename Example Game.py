@@ -2,6 +2,7 @@ import sys
 import time
 import threading
 from typing import Optional
+from collections import deque
 
 import pygame
 
@@ -33,6 +34,7 @@ api = Spirometer(
     calibration_samples=200,
     stability_std_threshold=30.0,      # <-- Increased threshold
     stability_min_samples=15,          # <-- Fewer samples required
+    drift_alpha=0.01                   # <-- Higher drift alpha
 )
 
 connect_state = {"state": "connecting", "error": None}
@@ -65,12 +67,16 @@ FLAP_VELOCITY = -12
 PIPE_GAP = 320
 PIPE_WIDTH = 70
 PIPE_SPEED = 2
-SPAWN_TIME = 1400  # ms
+SPAWN_TIME = 2800  # ms
 
 # Input mapping params
 X_DEADBAND = 6.0     # ignore small noise around zero
-FLAP_THRESHOLD = 10.0  # when |cal_x| exceeds this, trigger a flap
+FLAP_THRESHOLD = 15.0  # when |cal_x| exceeds this, trigger a flap
 LPF_ALPHA = 0.25     # smoothing factor for cal_x
+
+# Recalibration params
+IDLE_X_THRESHOLD = 1.2 * X_DEADBAND  # Consider device idle if |filtered_x| < this for most of the window
+IDLE_RATIO_REQUIRED = 0.90  # % of samples in window that must be idle to consider device idle
 
 
 def text(surface, s, x, y, color=(255, 255, 255)):
@@ -134,6 +140,16 @@ pygame.time.set_timer(SPAWN_EVENT, SPAWN_TIME)
 
 filtered_x = 0.0
 
+# For recalibration logic
+AVG_WINDOW_SECONDS = 10.0
+RECALIBRATE_CHECK_INTERVAL = 10.0  # seconds
+MIN_TIME_BETWEEN_RECALIBRATIONS = 60.0  # seconds
+
+startup_time = time.time()
+last_recalibrate_time = startup_time  # Track last recalibration or startup
+last_recalibrate_check = startup_time
+
+
 battery_percent: Optional[int] = None
 last_battery_read = 0.0
 BATTERY_INTERVAL = 15.0  # seconds
@@ -163,6 +179,25 @@ while running:
     raw_x = api.get_latest_calibrated_x(0.0)
     # Low-pass filter
     filtered_x = (1.0 - LPF_ALPHA) * filtered_x + LPF_ALPHA * raw_x
+
+    # --- Recalibration logic (now uses API's idle detection) ---
+    now = time.time()
+    if (
+        now - last_recalibrate_time > MIN_TIME_BETWEEN_RECALIBRATIONS
+        and now - startup_time > MIN_TIME_BETWEEN_RECALIBRATIONS
+        and now - last_recalibrate_check > RECALIBRATE_CHECK_INTERVAL
+    ):
+        last_recalibrate_check = now
+        if api.is_idle(IDLE_X_THRESHOLD, IDLE_RATIO_REQUIRED, AVG_WINDOW_SECONDS):
+            avg_val = api.get_idle_avg_x(AVG_WINDOW_SECONDS)
+            if avg_val is not None and abs(avg_val) > X_DEADBAND:
+                try:
+                    print(f"Auto-recalibrating (idle drift): avg_x over {AVG_WINDOW_SECONDS}s = {avg_val:.1f}")
+                    api.calibrate()
+                    last_recalibrate_time = now  # Update last recalibration time
+                except Exception as e:
+                    print(f"Recalibration failed: {e}")
+                    last_recalibrate_time = now  # Prevent rapid retries on error
 
     # Trigger flap when x magnitude is large
     if should_flap_from_x(filtered_x):
@@ -230,6 +265,15 @@ while running:
         text(screen, f"cal_x: {filtered_x:6.1f}", 20, 50)
         if battery_percent is not None:
             text(screen, f"Battery: {battery_percent}%", 20, 80)
+
+    # --- Draw red square if device is idle ---
+    if api.is_idle(IDLE_X_THRESHOLD, IDLE_RATIO_REQUIRED, AVG_WINDOW_SECONDS):
+        square_size = 40
+        pygame.draw.rect(
+            screen,
+            (220, 40, 40),
+            (WIDTH - square_size - 10, HEIGHT - square_size - 10, square_size, square_size)
+        )
 
     pygame.display.flip()
     clock.tick(60)
