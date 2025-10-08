@@ -31,7 +31,7 @@ Requirements
 api = Spirometer(
     device_id="9C:13:9E:9D:20:C1",
     auto_calibrate_on_connect=True,
-    calibration_samples=200,
+    calibration_samples=50,
     stability_std_threshold=30.0,      # <-- Increased threshold
     stability_min_samples=15,          # <-- Fewer samples required
     drift_alpha=0.01                   # <-- Higher drift alpha
@@ -262,7 +262,9 @@ while running:
         text(screen, "Press SPACE to play without device.", 20, 50, (255, 180, 180))
     else:
         text(screen, f"Score: {score}", 20, 20)
-        text(screen, f"cal_x: {filtered_x:6.1f}", 20, 50)
+        # Show 0 if |filtered_x| < X_DEADBAND
+        display_x = 0.0 if abs(filtered_x) < X_DEADBAND else filtered_x
+        text(screen, f"cal_x: {display_x:6.1f}", 20, 50)
         if battery_percent is not None:
             text(screen, f"Battery: {battery_percent}%", 20, 80)
 

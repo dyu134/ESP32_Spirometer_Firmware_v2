@@ -171,6 +171,7 @@ class Spirometer:
                 return any(u.lower() == self.data_service_uuid.lower() for u in svc_uuids)
 
             dev = await BleakScanner.find_device_by_filter(_filter, timeout=timeout)
+            print(f"Found device: {dev}")
             return dev.address if dev else None
 
         addr = self._run_coro(_scan())
@@ -180,9 +181,11 @@ class Spirometer:
 
     def connect(self) -> None:
         """Connect and start streaming. Auto-calibrate if enabled."""
+        print("Connecting...")
         if not self.device_id:
             raise RuntimeError("device_id not set. Call discover_and_set_device() or provide device_id.")
         self._run_coro(self._async_connect())
+        print("Connected")
 
     def disconnect(self) -> None:
         self._run_coro(self._async_disconnect())
