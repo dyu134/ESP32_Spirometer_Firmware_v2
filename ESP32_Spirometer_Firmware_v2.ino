@@ -89,6 +89,7 @@ const float sensor2Transform[3][3] = {
 class MyServerCallbacks: public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
+    Serial.println("Connected");
   };
   
   void onDisconnect(BLEServer* pServer) {
@@ -97,6 +98,8 @@ class MyServerCallbacks: public BLEServerCallbacks {
     pCharacteristic2->notify();
     pCharacteristicY->notify();
 
+    BLEDevice::startAdvertising();
+    Serial.println("Disconnected, reconnecting...");
   }
 };
 
