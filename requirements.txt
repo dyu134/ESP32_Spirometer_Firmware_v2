@@ -4,4 +4,3 @@ typing_extensions==4.15.0
 pygame==2.6.1
 matplotlib==3.7.1
 numpy==1.26.4
-pyserial==3.5
