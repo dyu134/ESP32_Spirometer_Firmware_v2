@@ -70,12 +70,12 @@ PIPE_SPEED = 2
 SPAWN_TIME = 2800  # ms
 
 # Input mapping params
-X_DEADBAND = 6.0     # ignore small noise around zero
-FLAP_THRESHOLD = 15.0  # when |cal_x| exceeds this, trigger a flap
+X_DEADBAND = 10.0     # ignore small noise around zero
+FLAP_THRESHOLD = 12.0  # when |cal_x| exceeds this, trigger a flap
 LPF_ALPHA = 0.25     # smoothing factor for cal_x
 
 # Recalibration params
-IDLE_X_THRESHOLD = 1.2 * X_DEADBAND  # Consider device idle if |filtered_x| < this for most of the window
+IDLE_X_THRESHOLD = 1.1 * X_DEADBAND  # Consider device idle if |filtered_x| < this for most of the window
 IDLE_RATIO_REQUIRED = 0.90  # % of samples in window that must be idle to consider device idle
 
 

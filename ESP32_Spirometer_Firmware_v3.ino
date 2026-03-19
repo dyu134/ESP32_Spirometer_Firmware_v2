@@ -6,13 +6,16 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLEServer.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #define NEOPIXEL_PIN 47
 #define NUMPIXELS 1
 #define PI 3.14159265f
 
-Adafruit_MLX90393 sensor1 = Adafruit_MLX90393();  // Top sensor (pin1 front)
-Adafruit_MLX90393 sensor2 = Adafruit_MLX90393();  // Bottom sensor (pin1 right)
+Adafruit_MLX90393 sensor1 = Adafruit_MLX90393();  // Top sensor 
+Adafruit_MLX90393 sensor2 = Adafruit_MLX90393();  // Bottom sensor 
 Adafruit_NeoPixel pixels(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 //BLE Server name (the other ESP32 name running the server sketch)
@@ -64,6 +67,23 @@ const int initialCalibrationSamples = 100;
 // LED control parameters
 const int maxBrightness = 200;
 const float deadZone = 10.0;
+
+struct SensorData {
+  float x1;
+  float y1;
+  float z1;
+  float x2;
+  float y2;
+  float z2;
+  bool valid;
+};
+
+SensorData sharedSensorData;
+SemaphoreHandle_t dataMutex;
+TaskHandle_t sensorTaskHandle = nullptr;
+TaskHandle_t processingTaskHandle = nullptr;
+bool sensorDataAvailable = false;
+float lastBatteryPercentage = 100.0;
 
 struct HPF {
   float prev_x = 0, prev_y = 0;
@@ -211,11 +231,107 @@ void updateBatteryDisplay(float percentage) {
   }
 }
 
+void handleBattery() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastBatteryUpdateTime >= batteryUpdateInterval) {
+    lastBatteryUpdateTime = currentMillis;
+    float voltage = readBatteryVoltage();
+    lastBatteryPercentage = calculateBatteryPercentage(voltage);
+    updateBatteryDisplay(lastBatteryPercentage);
+    uint8_t level = (uint8_t)round(lastBatteryPercentage);
+    pBatteryCharacteristic->setValue(&level, 1);
+    if (deviceConnected) {
+      pBatteryCharacteristic->notify();
+      Serial.print("BLE Battery Level Updated: ");
+      Serial.print(level);
+      Serial.println("%");
+    }
+  }
+  if (lastBatteryPercentage < 10.0) {
+    if (currentMillis - previousMillis >= flashInterval) {
+      previousMillis = currentMillis;
+      flashState = !flashState;
+      digitalWrite(arrayPin[0], flashState ? HIGH : LOW);
+    }
+  } else if (flashState) {
+    flashState = false;
+    updateBatteryDisplay(lastBatteryPercentage);
+  }
+}
+
+void sensorTask(void* parameter) {
+  for (;;) {
+    float x1, y1, z1, x2, y2, z2;
+    bool success = sensor1.readData(&x1, &y1, &z1) && sensor2.readData(&x2, &y2, &z2);
+    if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
+      if (success) {
+        sharedSensorData.x1 = x1;
+        sharedSensorData.y1 = y1;
+        sharedSensorData.z1 = z1;
+        sharedSensorData.x2 = x2;
+        sharedSensorData.y2 = y2;
+        sharedSensorData.z2 = z2;
+        sharedSensorData.valid = true;
+      } else {
+        sharedSensorData.valid = false;
+      }
+      sensorDataAvailable = true;
+      xSemaphoreGive(dataMutex);
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
+void processingTask(void* parameter) {
+  SensorData localData;
+  for (;;) {
+    bool hasData = false;
+    if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
+      if (sensorDataAvailable) {
+        localData = sharedSensorData;
+        sensorDataAvailable = false;
+        hasData = true;
+      }
+      xSemaphoreGive(dataMutex);
+    }
+    if (hasData) {
+      if (localData.valid) {
+        updateNeopixel(localData.x1);
+        if (deviceConnected) {
+          Serial.print(localData.x1, 2);
+          Serial.print(" ");
+          Serial.print(localData.z1, 2);
+          Serial.println();
+          
+          float dataX[2] = {localData.x1, localData.x2};
+          pCharacteristic1->setValue((uint8_t *)dataX, sizeof(dataX));
+          pCharacteristic1->notify();
+          
+          float dataZ[2] = {localData.z1, localData.z2};
+          pCharacteristic2->setValue((uint8_t *)dataZ, sizeof(dataZ));
+          pCharacteristic2->notify();
+          
+          float dataY[2] = {localData.y1, localData.y2};
+          pCharacteristicY->setValue((uint8_t *)dataY, sizeof(dataY));
+          pCharacteristicY->notify();
+        }
+      } else {
+        Serial.println("Sensor read error");
+        pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+        pixels.show();
+      }
+    }
+    handleBattery();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
-  while(!Serial) {
-    delay(10);
-  }
+  delay(100);
+  // while(!Serial) {
+  //   delay(10);
+  // }
 
   for (int i = 0; i < 4; i++) {
     pinMode(arrayPin[i], OUTPUT);
@@ -235,30 +351,27 @@ void setup() {
   // Initialize sensors
   Wire.begin(48, 34);
   
-  if (!sensor1.begin_I2C()){
+  while (!sensor1.begin_I2C()){
     Serial.println("Sensor 1 (top) not found");
-    while (1) { delay(10); }
   }
   sensor1.setGain(MLX90393_GAIN_1X);
   sensor1.setResolution(MLX90393_X, MLX90393_RES_19);
   sensor1.setResolution(MLX90393_Y, MLX90393_RES_19);
   sensor1.setResolution(MLX90393_Z, MLX90393_RES_16);
-  sensor1.setOversampling(MLX90393_OSR_2);
-  sensor1.setFilter(MLX90393_FILTER_5);
+  sensor1.setOversampling(MLX90393_OSR_1);
+  sensor1.setFilter(MLX90393_FILTER_3);
   digitalWrite(arrayPin[0], HIGH);
-  
 
   Wire1.begin(2, 1);
-  if (!sensor2.begin_I2C(MLX90393_DEFAULT_ADDR, &Wire1)){
+  while (!sensor2.begin_I2C(MLX90393_DEFAULT_ADDR, &Wire1)){
     Serial.println("Sensor 2 (bottom) not found");
-    while (1) { delay(10); }
   }
   sensor2.setGain(MLX90393_GAIN_1X);
   sensor2.setResolution(MLX90393_X, MLX90393_RES_19);
   sensor2.setResolution(MLX90393_Y, MLX90393_RES_19);
   sensor2.setResolution(MLX90393_Z, MLX90393_RES_16);
-  sensor2.setOversampling(MLX90393_OSR_2);
-  sensor2.setFilter(MLX90393_FILTER_5);
+  sensor2.setOversampling(MLX90393_OSR_1);
+  sensor2.setFilter(MLX90393_FILTER_3);
   digitalWrite(arrayPin[1], HIGH);
 
   // Initial calibration
@@ -333,103 +446,16 @@ void setup() {
   pAdvertising->setMinPreferred(0x1F);
   BLEDevice::startAdvertising();
   Serial.println("Waiting for connections...");
+
+  sharedSensorData.valid = false;
+  sensorDataAvailable = false;
+  dataMutex = xSemaphoreCreateMutex();
+  if (dataMutex != nullptr) {
+    xTaskCreatePinnedToCore(sensorTask, "SensorTask", 4096, nullptr, 2, &sensorTaskHandle, 0);
+    xTaskCreatePinnedToCore(processingTask, "ProcessingTask", 6144, nullptr, 2, &processingTaskHandle, 1);
+  }
 }
 
 void loop() {
-  float x1, y1, z1, x2, y2, z2;
-  // 
-  if (sensor1.readData(&x1, &y1, &z1) && sensor2.readData(&x2, &y2, &z2)) {
-    // transformSensor2Readings(&x2, &y2, &z2);
-    
-    // // Update Earth's field estimate
-    // earthX = (1 - smoothingFactor) * earthX + smoothingFactor * x2;
-    // earthY = (1 - smoothingFactor) * earthY + smoothingFactor * y2;
-    // earthZ = (1 - smoothingFactor) * earthZ + smoothingFactor * z2;
-    
-    // // Calculate compensated local X value
-    // float localX = x1 - earthX - localXOffset;
-    // float localZ = z1 - earthZ - localZOffset;
-
-    // float localX = -1*(x1 - x2 - localXOffset);
-    // float localZ = z1 + z2 - localZOffset;
-
-    // float filteredLocalX = hpf_x.update(localX);
-    
-    // Update LED
-    // x1 = 0.0;
-    // z1 = 0.0;
-    // y1 = 0.0;
-    updateNeopixel(x1);
-
-    // Print results
-    if (deviceConnected) {
-      //Serial.print("Adj. Local X: ");
-      Serial.print(x1, 2);
-      Serial.print(" ");
-      //Serial.print(localZ, 2);
-      //Serial.print(" ");
-      Serial.print(z1, 2);
-      //Serial.print(" uT | Offset: ");
-      //Serial.print(localXOffset, 2);
-      //Serial.print(" | Samples: ");
-      //Serial.print(sampleCount);
-      Serial.println();
-
-      String data1 = "s " + String(x1, 2) + " x1 " + String(z1, 2) + " z1";
-      String data2 = "s " + String(x2, 2) + " x2 " + String(z2, 2) + " z2";
-      String dataY = "s " + String(y1, 2) + " y1 " + String(y2, 2) + " y2";
-      // Send the data over BLE
-      pCharacteristic1->setValue(data1.c_str());
-      pCharacteristic1->notify();
-      pCharacteristic2->setValue(data2.c_str());
-      pCharacteristic2->notify();
-      pCharacteristicY->setValue(dataY.c_str());
-      pCharacteristicY->notify();
-    }
-
-    // Check for recalibration
-    //sampleCount++;
-    //if (sampleCount >= recalibrationInterval && !recalibrating) {
-      //digitalWrite(arrayPin[3], HIGH);
-      //recalibrateOffset();
-      //digitalWrite(arrayPin[3], LOW);
-    //}
-  } else {
-    Serial.println("Sensor read error");
-    pixels.setPixelColor(0, pixels.Color(0, 0, 0));
-    pixels.show();
-  }
-  
-  float batteryVoltage = readBatteryVoltage();
-  float batteryPercentage = calculateBatteryPercentage(batteryVoltage);
-  // Display battery level on LEDs
-  updateBatteryDisplay(batteryPercentage);
-
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastBatteryUpdateTime >= batteryUpdateInterval) {
-    lastBatteryUpdateTime = currentMillis;
-    
-    uint8_t level = (uint8_t)round(batteryPercentage);
-    pBatteryCharacteristic->setValue(&level, 1);
-    
-    if (deviceConnected) {
-      pBatteryCharacteristic->notify();
-      Serial.print("BLE Battery Level Updated: ");
-      Serial.print(level);
-      Serial.println("%");
-    }
-  }
-
-  // Check for low battery condition
-  if (batteryPercentage < 10.0) {
-    // Flash the FIRST LED (0-25% LED)
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= flashInterval) {
-      previousMillis = currentMillis;
-      flashState = !flashState;
-      digitalWrite(arrayPin[0], flashState ? HIGH : LOW);
-    }
-  }
-
-  // delay(50);
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }

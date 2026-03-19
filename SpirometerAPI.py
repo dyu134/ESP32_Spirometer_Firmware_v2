@@ -14,14 +14,14 @@ class Spirometer:
     Python BLE client for ESP32 Spirometer.
 
     Streams raw hall sensor values from three BLE characteristics:
-      - c1_char: x1, z1
-      - c2_char: x2, z2
+      - c1_char: x1, x2
+      - c2_char: z1, z2
       - y_char:  y1, y2
 
     Combines these into a single sample:
       - dx = x1 - x2
       - dy = y1 + y2
-      - dz = z1 + z2
+      - dz = z1 - z2
 
     Calibrates cilia field using earth field:
       - cal_x = dx - offset_x
@@ -117,8 +117,8 @@ class Spirometer:
         self._last_idle_start: Optional[float] = None
 
         # Buffers for characteristic data
-        self._c1_data = None  # (x1, z1)
-        self._c2_data = None  # (x2, z2)
+        self._c1_data = None  # (x1, x2)
+        self._c2_data = None  # (z1, z2)
         self._y_data = None   # (y1, y2)
         self._last_sample_time = 0.0
 
@@ -383,7 +383,7 @@ class Spirometer:
         try:
             txt = data.decode(errors="ignore").strip()
             parts = txt.split()
-            # Expect: s <x1> x1 <z1> z1
+            # Expect: s <x1> x1 <x2> x2
             vals = []
             for i in (1, 3):
                 if i < len(parts):
@@ -393,7 +393,7 @@ class Spirometer:
                         vals.append(float('nan'))
                 else:
                     vals.append(float('nan'))
-            self._c1_data = tuple(vals)  # (x1, z1)
+            self._c1_data = tuple(vals)  # (x1, x2)
             self._try_process_sample()
         except Exception:
             return
@@ -402,7 +402,7 @@ class Spirometer:
         try:
             txt = data.decode(errors="ignore").strip()
             parts = txt.split()
-            # Expect: s <x2> x2 <z2> z2
+            # Expect: s <z1> z1 <z2> z2
             vals = []
             for i in (1, 3):
                 if i < len(parts):
@@ -412,7 +412,7 @@ class Spirometer:
                         vals.append(float('nan'))
                 else:
                     vals.append(float('nan'))
-            self._c2_data = tuple(vals)  # (x2, z2)
+            self._c2_data = tuple(vals)  # (z1, z2)
             self._try_process_sample()
         except Exception:
             return
@@ -440,8 +440,8 @@ class Spirometer:
         # Only process when all three have new data
         if self._c1_data is None or self._c2_data is None or self._y_data is None:
             return
-        x1, z1 = self._c1_data
-        x2, z2 = self._c2_data
+        x1, x2 = self._c1_data
+        z1, z2 = self._c2_data
         y1, y2 = self._y_data
         now_t = time.time()
         # Compose difference (cilia - earth)
