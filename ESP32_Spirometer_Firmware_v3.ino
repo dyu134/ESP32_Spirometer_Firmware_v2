@@ -156,39 +156,6 @@ void updateNeopixel(float localX) {
   pixels.show();
 }
 
-// void recalibrateOffset() {
-//   calibrating = true;
-//   Serial.println("Starting offset recalibration...");
-  
-//   // Take new offset samples
-//   float sumX = 0;
-//   float sumZ = 0;
-//   for (int i = 0; i < initialCalibrationSamples; i++) {
-//     if (i > 0.4 * initialCalibrationSamples && i <= 0.9 * initialCalibrationSamples) {
-//       float x1, y1, z1, x2, y2, z2;
-//       if (sensor1.readData(&x1, &y1, &z1) && sensor2.readData(&x2, &y2, &z2)) {
-//         transformSensor2Readings(&x2, &y2, &z2);
-//         float localX = x1 - x2;
-//         float localZ = z1 - z2;
-//         sumX += localX;
-//         sumZ += localZ;
-//       }
-//     } else {
-//       float x1, y1, z1, x2, y2, z2;
-//       sensor1.readData(&x1, &y1, &z1); 
-//       sensor2.readData(&x2, &y2, &z2);
-//     }
-//     //delay(20);
-//   }
-  
-//   localXOffset = sumX / (initialCalibrationSamples * 0.5);
-//   localZOffset = sumZ / (initialCalibrationSamples * 0.5);
-//   sampleCount = 0;
-//   calibrating = false;
-  
-//   Serial.print("New local X offset: ");
-//   Serial.println(localXOffset, 4);
-// }
 
 float readBatteryVoltage() {
   // Read the ADC value (12-bit resolution)
@@ -342,10 +309,6 @@ void setup() {
   pixels.setBrightness(100);
   pixels.show();
 
-  // float fc = 0.1;
-  // float dt = 0.0625;
-  // hpf_x.alpha = 1.0 / (1.0 + 1.0 / (2.0 * PI * fc * dt));
-
   Serial.println("Starting Magnetic Field Measurement");
 
   // Initialize sensors
@@ -373,30 +336,6 @@ void setup() {
   sensor2.setOversampling(MLX90393_OSR_1);
   sensor2.setFilter(MLX90393_FILTER_3);
   digitalWrite(arrayPin[1], HIGH);
-
-  // Initial calibration
-  
-  // Serial.println("Phase 1: Calibrating Earth's field");
-  // float sumX = 0, sumY = 0, sumZ = 0;
-  // for (int i = 0; i < initialCalibrationSamples; i++) {
-  //   if (i > 0.4*initialCalibrationSamples && i <= 0.9*initialCalibrationSamples) {
-  //     float x, y, z;
-  //     if (sensor2.readData(&x, &y, &z)) {
-  //       transformSensor2Readings(&x, &y, &z);
-  //       sumX += x;
-  //       sumY += y;
-  //       sumZ += z;
-  //     }
-  //     //delay(20);
-  //   }
-  // }
-  // //earthX = sumX / (initialCalibrationSamples*0.5);
-  // //earthY = sumY / (initialCalibrationSamples*0.5);
-  // //earthZ = sumZ / (initialCalibrationSamples*0.5);
-  
-  // Serial.println("Measuring initial local X offset");
-  // recalibrateOffset();
-  // digitalWrite(arrayPin[2], HIGH);
 
   for (int i = 0; i < 4; i++) {
     digitalWrite(arrayPin[i], LOW);
